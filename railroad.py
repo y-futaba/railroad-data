@@ -14,22 +14,20 @@ MultiLineString：LineString の集合\
 ## import
 """
 
-!pip install japanize-matplotlib
-
-import geopandas as gpd
-from shapely import ops
-from shapely.geometry import Point, LineString, MultiLineString, Polygon
-import pyproj
-import pandas as pd
-import numpy as np
-# from graphillion import GraphSet as gs
 import itertools
-import networkx as nx
+import shutil
 from collections import defaultdict
 from pathlib import Path
+
+import geopandas as gpd
 import matplotlib.pyplot as plt
-import japanize_matplotlib
-import shutil
+import networkx as nx
+import numpy as np
+import pandas as pd
+import pyproj
+from shapely import ops
+from shapely.geometry import LineString, MultiLineString, Point, Polygon
+
 
 def segments_from_ls(ls: LineString, order=False):
     starts = ls.coords[:-1]
@@ -39,18 +37,20 @@ def segments_from_ls(ls: LineString, order=False):
     else:
         return [frozenset(seg) for seg in zip(starts, targets)]
 
+
 def get_all_segments(mls: MultiLineString, order=False):
-    return list(
-        {seg for ls in mls.geoms for seg in segments_from_ls(ls, order)}
-    )
+    return list({seg for ls in mls.geoms for seg in segments_from_ls(ls, order)})
+
 
 def dist_from_lonlat(p1, p2):
     wgs84 = pyproj.Geod(ellps="WGS84")
     azimuth, bkw_azimuth, dist = wgs84.inv(*p1, *p2)
     return dist
 
+
 def get_lengths(segments):
     return [dist_from_lonlat(*seg) for seg in segments]
+
 
 def get_point_at_length(ls: LineString, at_length: float, ratio=False) -> Point:
     wgs84 = pyproj.Geod(ellps="WGS84")
@@ -60,10 +60,10 @@ def get_point_at_length(ls: LineString, at_length: float, ratio=False) -> Point:
     length = cumulative_lengths[-1]
     if ratio:
         at_length = at_length * length
-    if (at_length < 0 or at_length > length):
+    if at_length < 0 or at_length > length:
         return np.nan
 
-    i = np.searchsorted(cumulative_lengths, at_length, side='left')
+    i = np.searchsorted(cumulative_lengths, at_length, side="left")
     # at_length から 直前のセグメントまでの累積長を引いた距離をセグメントの始点に足す場合，i = 0 の場合に注意
     segment_end_length = cumulative_lengths[i]
     s, t = segments[i]
@@ -72,32 +72,31 @@ def get_point_at_length(ls: LineString, at_length: float, ratio=False) -> Point:
     lon, lat, bkw_azimuth = wgs84.fwd(*t, azimuth, overrun)
     return Point(lon, lat)
 
+
 def get_center(ls: LineString):
     return get_point_at_length(ls, 0.5, True)
+
 
 def representative_station_point(row):
     if (row["N02_005"] == "広木") and (row["N02_003"] == "鹿児島線") and (row["N02_004"] == "九州旅客鉄道"):
         coords = row["geometry"].coords
         lons = [lon for lon, lat in coords]
-        return Point(
-            list(coords)[lons.index( max(lons) )]
-        )
+        return Point(list(coords)[lons.index(max(lons))])
     else:
         return get_center(row["geometry"])
+
 
 def cir_buffer(pt: Point, r: float):
     # r [deg]
     rads = 2 * np.pi * np.arange(16) / 16
     return Polygon(list(zip(pt.x + r * np.cos(rads), pt.y + r * np.sin(rads))))
 
+
 def pt_norm_sq(p1: Point, p2: Point):
     return np.power(p1.x - p2.x, 2) + np.power(p1.y - p2.y, 2)
 
-def snap_edge(
-    ls: LineString,
-    pt_gs: gpd.GeoSeries,
-    tolerance: float
-) -> LineString:
+
+def snap_edge(ls: LineString, pt_gs: gpd.GeoSeries, tolerance: float) -> LineString:
     new_coords = list(ls.coords)
     # ラインの終点[-1]と始点[0]を処理
     for i in [-1, 0]:
@@ -109,28 +108,19 @@ def snap_edge(
             new_coords[i] = list(new_pt.coords)[0]
     return LineString(new_coords)
 
-def split_line_at_point(
-    ls_gdf: gpd.GeoDataFrame,
-    pt_gdf: gpd.GeoDataFrame,
-    tolerance: float
-) -> gpd.GeoDataFrame:
+
+def split_line_at_point(ls_gdf: gpd.GeoDataFrame, pt_gdf: gpd.GeoDataFrame, tolerance: float) -> gpd.GeoDataFrame:
     # ポイントから許容誤差でバッファ
     pt_gdf["_buffer_poly"] = pt_gdf["geometry"].apply(cir_buffer, r=0.9 * tolerance)
     # ラインをバッファでくり抜き
     ls_gdf = gpd.overlay(
-        df1=ls_gdf,
-        df2=pt_gdf[["_buffer_poly"]].set_geometry("_buffer_poly"),
-        how="symmetric_difference",
-        keep_geom_type=True
+        df1=ls_gdf, df2=pt_gdf[["_buffer_poly"]].set_geometry("_buffer_poly"), how="symmetric_difference", keep_geom_type=True
     )
     ls_gdf = ls_gdf.explode(index_parts=False)
     # 端点をポイントにスナップ
-    ls_gdf["geometry"] = ls_gdf["geometry"].apply(
-        snap_edge,
-        pt_gs=pt_gdf["geometry"],
-        tolerance=tolerance
-    )
+    ls_gdf["geometry"] = ls_gdf["geometry"].apply(snap_edge, pt_gs=pt_gdf["geometry"], tolerance=tolerance)
     return ls_gdf
+
 
 def gen_graph_from_ls_gs(ls_gs: gpd.GeoSeries):
     g = nx.Graph()
@@ -138,23 +128,24 @@ def gen_graph_from_ls_gs(ls_gs: gpd.GeoSeries):
         g.add_edges_from(segments)
     return g
 
+
 def edge_to_adj(segments):
     adjs = defaultdict(set)
-    for (s, t) in segments:
+    for s, t in segments:
         adjs[s].add(t)
         adjs[t].add(s)
     return dict(adjs)
+
 
 def excluded_sta_coords(ls_gs: gpd.GeoSeries, sta_pt_gs: gpd.GeoSeries):
     all_coords = set(ls_gs.map(lambda ls: list(ls.coords)).explode())
     sta_coords = set(sta_pt_gs.map(lambda pt: (pt.x, pt.y)))
     return sta_coords - all_coords
 
+
 def edge_stations(ls_gs: gpd.GeoSeries, sta_pt_gs: gpd.GeoSeries):
     # segments_from_ls() が set を返してきても動く
-    adjs = edge_to_adj(
-        ls_gs.map(segments_from_ls).explode()
-    )
+    adjs = edge_to_adj(ls_gs.map(segments_from_ls).explode())
     all_coords = set(ls_gs.map(lambda ls: list(ls.coords)).explode())
     sta_coords = set(sta_pt_gs.map(lambda pt: (pt.x, pt.y)))
     # for coord in sta_coords - all_coords:
@@ -169,7 +160,8 @@ def edge_stations(ls_gs: gpd.GeoSeries, sta_pt_gs: gpd.GeoSeries):
         while stack:
             current = stack.pop()
             for adj in adjs[current]:
-                if adj in visited: continue
+                if adj in visited:
+                    continue
                 if adj in sta_coords:
                     edge_stas.add(adj)
                     continue
@@ -186,12 +178,15 @@ def edge_stations(ls_gs: gpd.GeoSeries, sta_pt_gs: gpd.GeoSeries):
 
     return coord_to_edge_stas, {k: frozenset(v) for k, v in edge_stas_to_coords.items()}
 
+
 def adjacent_stations(edge_stas_to_coords):
     return {stas_set for stas_set in edge_stas_to_coords.keys() if len(stas_set) >= 2}
+
 
 def check_adjacent_stations_with_ls(ls_df: gpd.GeoDataFrame, sta_pt_df: gpd.GeoDataFrame):
     ls_gs = ls_df["geometry"]
     coord_to_edge_stas = edge_stations(ls_gs.copy(), sta_pt_df["geometry"].copy())[0]
+
     def func(row):
         ls = row["geometry"]
         # flag = 0
@@ -203,10 +198,14 @@ def check_adjacent_stations_with_ls(ls_df: gpd.GeoDataFrame, sta_pt_df: gpd.GeoD
         #     else:
         #         stas.add(coord)
         if len(edge_stas_set) == 1:
-            return ",".join(list({
-                sta_pt_df[sta_pt_df["geometry"] == Point(edge_sta)][["N02_005"]].iloc[0,0]
-                for edge_sta in edge_stas_set.pop()
-            }))
+            return ",".join(
+                list(
+                    {
+                        sta_pt_df[sta_pt_df["geometry"] == Point(edge_sta)][["N02_005"]].iloc[0, 0]
+                        for edge_sta in edge_stas_set.pop()
+                    }
+                )
+            )
         else:
             return "❗️"
         #     flag = 1
@@ -215,47 +214,10 @@ def check_adjacent_stations_with_ls(ls_df: gpd.GeoDataFrame, sta_pt_df: gpd.GeoD
         #     print(i, "❗️隣接駅の set に含まれていない駅があります")
         #     flag = 1
 
-    ls_df["adj_stas"] = ls_df.apply(
-        func,
-        axis=1
-    )
+    ls_df["adj_stas"] = ls_df.apply(func, axis=1)
 
     return ls_df
 
-"""## フォント"""
-
-!apt-get update -y
-!apt-get install -y fonts-noto-cjk
-
-# システムにあるフォント一覧を取得
-import matplotlib.font_manager as fm
-fonts = fm.findSystemFonts()
-for font in fonts:
-    print(font)
-
-# フォントキャッシュを削除
-import shutil
-from pathlib import Path
-shutil.rmtree(Path("~/.cache/matplotlib").expanduser())
-print("フォントキャッシュを削除しました。ランタイムを再起動してください。")
-
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
-
-# フォントのパスを指定
-font_path = "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
-
-# フォントプロパティを作成
-font_prop = fm.FontProperties(fname=font_path)
-
-# matplotlib に適用
-plt.rcParams["font.family"] = font_prop.get_name()
-print(plt.rcParams["font.family"])
-
-# テストプロット
-plt.figure(figsize=(5,3))
-plt.text(0.5, 0.5, "テスト: 日本語が表示されますか？", fontsize=15, ha='center')
-plt.show()
 
 """# 駅で路線切断
 
@@ -278,7 +240,7 @@ print([x for x in dissolved_railroads["geometry"][0].geoms[0].coords])
 """## 駅の代表点"""
 
 stations_path = "N02-22_Station.shp"
-stations_ls= gpd.read_file(stations_path, encoding="utf-8")
+stations_ls = gpd.read_file(stations_path, encoding="utf-8")
 
 stations = stations_ls.copy()
 stations["geometry"] = stations.apply(representative_station_point, axis=1)
@@ -291,12 +253,13 @@ stations
 lines = tuple(set(merged_railroads.index))
 splits = []
 for co, line_name in lines:
-    splits.append(split_line_at_point(
+    splits.append(
+        split_line_at_point(
             merged_railroads.loc[co, line_name],
             # stations の index を一意でないものにすると snap_edge() 内の distance_gs.idxmin() が複数得られて機能しなくなる
             stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)].copy(),
             # 9e-6 ° の差は北緯 25° から 45° の間では 1 m 以内
-            1e-5
+            1e-5,
         ).assign(co=co, line=line_name)
     )
     print(co, line_name)
@@ -308,17 +271,17 @@ railroad_split_by_stations = pd.concat(splits).set_index(["co", "line"]).sort_in
 """
 
 excluded_stas = [
-    [co, line_name,
-        stations[
-            (stations["N02_004"] == co) &
-            (stations["N02_003"] == line_name) &
-            (stations["geometry"] == Point(coord))
-        ].iat[0, 4]
+    [
+        co,
+        line_name,
+        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name) & (stations["geometry"] == Point(coord))].iat[
+            0, 4
+        ],
     ]
     for co, line_name in lines
     for coord in excluded_sta_coords(
         railroad_split_by_stations.loc[co, line_name]["geometry"],
-        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)].copy()["geometry"]
+        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)].copy()["geometry"],
     )
 ]
 excluded_stas
@@ -346,12 +309,13 @@ re_merged_railroads = re_merged_railroads.explode(index_parts=False)
 
 splits = []
 for co, line_name in lines:
-    splits.append(split_line_at_point(
+    splits.append(
+        split_line_at_point(
             re_merged_railroads.loc[co, line_name],
             # stations の index を一意でないものにすると snap_edge() 内の distance_gs.idxmin() が複数得られて機能しなくなる
             stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)].copy(),
             # 9e-6 ° の差は北緯 25° から 45° の間では 1 m 以内
-            1e-5
+            1e-5,
         ).assign(co=co, line=line_name)
     )
 re_railroad_split_by_stations = pd.concat(splits).set_index(["co", "line"]).sort_index()
@@ -359,17 +323,17 @@ re_railroad_split_by_stations = pd.concat(splits).set_index(["co", "line"]).sort
 re_railroad_split_by_stations
 
 re_excluded_stas = [
-    [co, line_name,
-        stations[
-            (stations["N02_004"] == co) &
-            (stations["N02_003"] == line_name) &
-            (stations["geometry"] == Point(coord))
-        ].iat[0, 4]
+    [
+        co,
+        line_name,
+        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name) & (stations["geometry"] == Point(coord))].iat[
+            0, 4
+        ],
     ]
     for co, line_name in lines
     for coord in excluded_sta_coords(
         re_railroad_split_by_stations.loc[co, line_name]["geometry"],
-        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)].copy()["geometry"]
+        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)].copy()["geometry"],
     )
 ]
 re_excluded_stas
@@ -389,22 +353,23 @@ adj_stas_ele_counts = []
 for co, line_name in lines:
     edge_stas_to_coords = edge_stations(
         re_railroad_split_by_stations.loc[co, line_name]["geometry"],
-        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)]["geometry"].copy()
+        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)]["geometry"].copy(),
     )[1]
     adj_stas = adjacent_stations(edge_stas_to_coords)
 
     sta_degree_counts.append(
         stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)]["geometry"]
-        .map(
-            lambda pt: sum( 1 if (pt.x, pt.y) in adj_sta else 0 for adj_sta in adj_stas )
-        ).value_counts().sort_index().rename(f"{co} {line_name}")
+        .map(lambda pt: sum(1 if (pt.x, pt.y) in adj_sta else 0 for adj_sta in adj_stas))
+        .value_counts()
+        .sort_index()
+        .rename(f"{co} {line_name}")
     )
 
     adj_stas_ele_counts.append(
         pd.Series(edge_stas_to_coords.keys()).map(len).value_counts().sort_index().rename(f"{co} {line_name}")
     )
 sta_degree_count_df = pd.DataFrame(sta_degree_counts).fillna(0).astype(int).reindex(columns=[0, 1, 2, 3])
-adj_stas_ele_count_df = pd.DataFrame(adj_stas_ele_counts).fillna(0).astype(int).reindex(columns=[0,1,2,3,4,5,6])
+adj_stas_ele_count_df = pd.DataFrame(adj_stas_ele_counts).fillna(0).astype(int).reindex(columns=[0, 1, 2, 3, 4, 5, 6])
 
 """## 駅に繋がっている線の数別にカウント
 ---
@@ -438,13 +403,17 @@ adj_stas_ele_count_df
 ---
 """
 
-irregular_lines = adj_stas_ele_count_df[(
-    adj_stas_ele_count_df[0] +
-    adj_stas_ele_count_df[3] +
-    adj_stas_ele_count_df[4] +
-    adj_stas_ele_count_df[5] +
-    adj_stas_ele_count_df[6] > 0
-) | (adj_stas_ele_count_df[1] != 2)]
+irregular_lines = adj_stas_ele_count_df[
+    (
+        adj_stas_ele_count_df[0]
+        + adj_stas_ele_count_df[3]
+        + adj_stas_ele_count_df[4]
+        + adj_stas_ele_count_df[5]
+        + adj_stas_ele_count_df[6]
+        > 0
+    )
+    | (adj_stas_ele_count_df[1] != 2)
+]
 irregular_lines
 
 irregular_sta_sets = []
@@ -452,29 +421,32 @@ for index, values in irregular_lines.to_dict(orient="index").items():
     co, line_name = index.split()
     sta_df = stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)][["N02_005", "geometry"]]
     edge_stas_to_coords = edge_stations(
-        re_railroad_split_by_stations.loc[co, line_name]["geometry"],
-        sta_df["geometry"].copy()
+        re_railroad_split_by_stations.loc[co, line_name]["geometry"], sta_df["geometry"].copy()
     )[1]
     print()
     print("-" * 20, co, line_name, "-" * 20)
     # print({k: f"{v} 個" for k, v in values.items() if v and k != 2})
     edge_stas_list = sorted(
-        list({
-            frozenset(
-                {sta_df[sta_df["geometry"] == Point(edge_sta)].iat[0,0] for edge_sta in edge_stas}
-            )
-            for edge_stas in edge_stas_to_coords.keys()
-            if len(edge_stas) != 2
-        }),
-        key=len
+        list(
+            {
+                frozenset({sta_df[sta_df["geometry"] == Point(edge_sta)].iat[0, 0] for edge_sta in edge_stas})
+                for edge_stas in edge_stas_to_coords.keys()
+                if len(edge_stas) != 2
+            }
+        ),
+        key=len,
     )
     for edge_stas in edge_stas_list:
         print(*[sta.ljust(10, "　") for sta in edge_stas])
 
-    irregular_sta_sets.append(pd.DataFrame([
-        {"co": co, "line": line_name} | {i: edge_sta for i, edge_sta in enumerate(edge_stas) }
-        for edge_stas in edge_stas_list
-    ]))
+    irregular_sta_sets.append(
+        pd.DataFrame(
+            [
+                {"co": co, "line": line_name} | {i: edge_sta for i, edge_sta in enumerate(edge_stas)}
+                for edge_stas in edge_stas_list
+            ]
+        )
+    )
 
 irregular_sta_set_df = pd.concat(irregular_sta_sets).fillna("").sort_values(["co", "line"]).reset_index(drop=True)
 irregular_sta_set_df.to_csv("irregular_sta_set.csv")
@@ -491,7 +463,7 @@ irregular_sta_set_df
 for co, line_name in lines:
     edge_stas_to_coords = edge_stations(
         re_railroad_split_by_stations.loc[co, line_name]["geometry"],
-        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)]["geometry"].copy()
+        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)]["geometry"].copy(),
     )[1]
     if frozenset() in edge_stas_to_coords:
         print(co, line_name)
@@ -501,13 +473,15 @@ for co, line_name in lines:
 
 """## 線の GeoDataFrame の属性に隣接駅を追加、出力"""
 
-railroads_with_adj_stas = pd.concat([
-    check_adjacent_stations_with_ls(
-        re_railroad_split_by_stations.loc[co, line_name].copy(),
-        stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)]
-    )
-    for co, line_name in lines
-]).sort_values(["co", "line"])
+railroads_with_adj_stas = pd.concat(
+    [
+        check_adjacent_stations_with_ls(
+            re_railroad_split_by_stations.loc[co, line_name].copy(),
+            stations[(stations["N02_004"] == co) & (stations["N02_003"] == line_name)],
+        )
+        for co, line_name in lines
+    ]
+).sort_values(["co", "line"])
 railroads_with_adj_stas.insert(1, "id", np.arange(len(railroads_with_adj_stas)) + 1)
 
 railroads_with_adj_stas.to_file("railroad_adj_stas.shp", encoding="utf-8")
@@ -515,10 +489,10 @@ railroads_with_adj_stas
 
 """## 各路線の行 (LineString) の数"""
 
-pd.DataFrame([
-    [ co, line_name, len(railroads_with_adj_stas.loc[co, line_name]) ]
-    for co, line_name in lines
-], columns=["co", "line", "count"]).set_index(["co", "line"])
+pd.DataFrame(
+    [[co, line_name, len(railroads_with_adj_stas.loc[co, line_name])] for co, line_name in lines],
+    columns=["co", "line", "count"],
+).set_index(["co", "line"])
 
 """---
 # ここで `railroad_with_adj_stas.shp` を GIS で編集して隣接駅を調整
@@ -535,13 +509,17 @@ pd.DataFrame([
 """
 
 railroad_with_adj_stas_manual_path = "railroad_adj_stas_manual.shp"
-rr_adjs_man = gpd.read_file(railroad_with_adj_stas_manual_path, encoding="utf-8").map(lambda x: "" if type(x) is None else (x.strip() if type(x) is str else x))
+rr_adjs_man = gpd.read_file(railroad_with_adj_stas_manual_path, encoding="utf-8").map(
+    lambda x: "" if type(x) is None else (x.strip() if type(x) is str else x)
+)
 rr_adjs_man["adj_stas"] = rr_adjs_man["adj_stas"].map(lambda x: tuple(sorted(x.split(","))))
 
-railroads_with_adj_stas = gpd.read_file("railroad_adj_stas.shp", encoding="utf-8").map(lambda x: "" if x is None else (x.strip() if type(x) is str else x))
+railroads_with_adj_stas = gpd.read_file("railroad_adj_stas.shp", encoding="utf-8").map(
+    lambda x: "" if x is None else (x.strip() if type(x) is str else x)
+)
 railroads_with_adj_stas["adj_stas"] = railroads_with_adj_stas["adj_stas"].map(lambda x: tuple(sorted(x.split(","))))
 
-rr_adjs_man[~rr_adjs_man["adj_stas"].map(lambda x: len(x) in (1,2))]
+rr_adjs_man[~rr_adjs_man["adj_stas"].map(lambda x: len(x) in (1, 2))]
 
 """## org と manual を比較して status を追加
 
@@ -553,12 +531,14 @@ unique_id[dup_count != 1]
 
 """### 同じ id で co, line が違うもの"""
 
+
 def app_func(row):
     idx = railroads_with_adj_stas["id"] == row["id"]
     if idx.sum() == 0:
         return False
     b = railroads_with_adj_stas[idx].iloc[0, :]
     return (b["co"] != row["co"]) or (b["line"] != row["line"])
+
 
 rr_adjs_man[rr_adjs_man.apply(app_func, axis=1)]
 
@@ -570,6 +550,7 @@ rr_adjs_man[rr_adjs_man.apply(app_func, axis=1)]
 ---
 """
 
+
 def app_func(row):
     if row["id"] == 0:
         return "copy" if railroads_with_adj_stas["geometry"].geom_equals(row["geometry"]).any() else "new"
@@ -580,6 +561,7 @@ def app_func(row):
         return "remain" if row["adj_stas"] == railroads_with_adj_stas[idx]["adj_stas"].iat[0] else "alter"
     return ""
 
+
 rr_adjs_man["status"] = rr_adjs_man.apply(app_func, axis=1)
 rr_adjs_man.groupby("status").size()
 
@@ -588,19 +570,22 @@ rr_adjs_man.groupby("status").size()
 sta_pt = gpd.read_file("station_pt.shp", encoding="utf-8")
 sta_pt_man = gpd.read_file("station_pt_manual.shp", encoding="utf-8")
 
+
 def app_func(row, df):
     bools = df["geometry"].geom_equals(row["geometry"])
     return bools.any() and ((df[bools] == row).all(axis=1).any())
 
-sta_pt_man[~sta_pt_man.apply(app_func, args=(sta_pt,), axis=1)] # 元にない man の駅点
 
-sta_pt[~sta_pt.apply(app_func, args=(sta_pt_man,), axis=1)] # man にない元の駅点
+sta_pt_man[~sta_pt_man.apply(app_func, args=(sta_pt,), axis=1)]  # 元にない man の駅点
+
+sta_pt[~sta_pt.apply(app_func, args=(sta_pt_man,), axis=1)]  # man にない元の駅点
 
 """# 駅同士の接続をグラフで表現"""
 
+
 def app_func(row):
     co, line = row["co"], row["line"]
-    adjs = rr_adjs_man.query('(co == @co) and (line == @line)')["adj_stas"]
+    adjs = rr_adjs_man.query("(co == @co) and (line == @line)")["adj_stas"]
     adjs_u = adjs[adjs.map(len) == 2].unique()
 
     if adjs_u.size == 0:
@@ -628,7 +613,17 @@ def app_func(row):
 
     if cycled or (not connected):
         plt.figure(figsize=(16, 16))
-        nx.draw(g, with_labels=True, node_color="white", node_size=2000, font_family=plt.rcParams["font.family"][0], edge_color="gray", linewidths=1, edgecolors="black", font_size=10)
+        nx.draw(
+            g,
+            with_labels=True,
+            node_color="white",
+            node_size=2000,
+            font_family=plt.rcParams["font.family"][0],
+            edge_color="gray",
+            linewidths=1,
+            edgecolors="black",
+            font_size=10,
+        )
         plt.savefig(image_path / f"{co}_{line}")
         plt.clf()
     # print(co, line, cycled, len(component_graphs), g.number_of_nodes(), g.number_of_edges())
@@ -636,11 +631,11 @@ def app_func(row):
     for comp_graph in component_graphs:
         # この連結成分で、辺がなくなるまで繰り返すよ
         while comp_graph.number_of_edges() > 0:
-
             # パスを削除すると非連結になるかもしれないから、
-            #「現在の」連結してる部分グラフごとに処理するんだよ
+            # 「現在の」連結してる部分グラフごとに処理するんだよ
             current_sub_components = [
-                comp_graph.subgraph(sc) for sc in nx.connected_components(comp_graph)
+                comp_graph.subgraph(sc)
+                for sc in nx.connected_components(comp_graph)
                 if comp_graph.subgraph(sc).number_of_edges() > 0
             ]
 
@@ -649,7 +644,7 @@ def app_func(row):
                 break
 
             edges_to_remove = []
-            path_found_in_iteration = False # 無限ループ防止用
+            path_found_in_iteration = False  # 無限ループ防止用
 
             for sub_comp in current_sub_components:
                 # ノードが1個以下じゃパスは作れないでしょ
@@ -659,7 +654,7 @@ def app_func(row):
                 try:
                     # 2. 直径となるパスを得る
                     diameter = nx.diameter(sub_comp)
-                    ecc = nx.eccentricity(sub_comp) # 各ノードの離心率
+                    ecc = nx.eccentricity(sub_comp)  # 各ノードの離心率
 
                     diameter_path_nodes = []
                     found_path = False
@@ -701,12 +696,16 @@ def app_func(row):
 
     return pd.Series([cycled, connected] + [",".join(path) for path in all_paths])
 
+
 sta_graph = rr_adjs_man.groupby(["co", "line"], as_index=False)
-sta_graph = pd.concat([sta_graph.size().drop(columns="size"), sta_graph.size().apply(app_func, axis=1)], axis=1).rename(columns={0: "cycled", 1: "connected"})
+sta_graph = pd.concat([sta_graph.size().drop(columns="size"), sta_graph.size().apply(app_func, axis=1)], axis=1).rename(
+    columns={0: "cycled", 1: "connected"}
+)
 sta_graph.to_csv("sta_graph.csv", sep="\t")
 sta_graph
 
 """# LineString を駅順に並び替え"""
+
 
 def sorter_factory(paths_list):
     """
@@ -728,7 +727,7 @@ def sorter_factory(paths_list):
             node_to_order[first_node] = order_index - 0.5
 
         for i in range(len(path) - 1):
-            u, v = path[i], path[i+1]
+            u, v = path[i], path[i + 1]
 
             # エッジ自体の順番は整数
             edge_key = tuple(sorted((u, v)))
@@ -763,7 +762,7 @@ def sorter_factory(paths_list):
 
 rr_sorted = []
 for row in sta_graph.itertuples(index=False, name=None):
-    df = rr_adjs_man.query('(co == @row[0]) and (line == @row[1])')
+    df = rr_adjs_man.query("(co == @row[0]) and (line == @row[1])")
     adjs_sorter = sorter_factory([path.split(",") for path in row[4:] if type(path) is str])
     sorted_df = df.sort_values(by="adj_stas", key=adjs_sorter)
     rr_sorted.append(sorted_df)
@@ -874,7 +873,7 @@ services = {
     "神戸市交通局": "神戸市営地下鉄",
     "鹿児島市交通局": "鹿児島市電",
     "熊本市交通局": "熊本市電",
-    "福岡市交通局": "福岡市地下鉄"
+    "福岡市交通局": "福岡市地下鉄",
 }
 # (co, line) → (service, line_alias)
 service_line_aliases = {
@@ -941,6 +940,7 @@ service_line_aliases = {
     ("千葉都市モノレール", "1号線"): ("千葉都市モノレール", "千葉都市モノレール1号線"),
 }
 
+
 def app_func(row):
     co, service, line, line_alias = row["co"], row["service"], row["line"], row["line_alias"]
     if (co, line) in service_line_aliases.keys():
@@ -948,6 +948,7 @@ def app_func(row):
         if service != row["service"]:
             print("🛑", service, row["service"], line)
     return pd.Series([service, line_alias])
+
 
 # 一応更新順は co → service → line → (service, line)
 rr_sorted["co_alias"] = rr_sorted["co"].replace(co_aliases)
@@ -978,11 +979,13 @@ pd.DataFrame(rr_sorted_out.drop(columns="geometry")).to_csv("rr_sorted.tsv", sep
 
 """## 補助でグラフ出力"""
 
-co_line_str = "東日本旅客鉄道\t東海道線" #@param {type:"string"}
+co_line_str = "東日本旅客鉄道\t東海道線"  # @param {type:"string"}
+
+
 def show_sta_graph(co="", line=""):
     g = nx.Graph()
     if line == "":
-        df = rr_sorted.query('(co == @co)')
+        df = rr_sorted.query("(co == @co)")
         df = df[df["adj_stas"].map(len) == 2]
 
         g.add_edges_from(df["adj_stas"])
@@ -993,7 +996,7 @@ def show_sta_graph(co="", line=""):
         color_map = {line: cmap(i) for i, line in enumerate(df["line"].unique())}
         edge_colors = [color_map[g.edges[e]["line"]] for e in g.edges()]
     elif co == "":
-        df = rr_sorted.query('(line == @line)')
+        df = rr_sorted.query("(line == @line)")
         df = df[df["adj_stas"].map(len) == 2]
 
         g.add_edges_from(df["adj_stas"])
@@ -1004,13 +1007,25 @@ def show_sta_graph(co="", line=""):
         color_map = {co: cmap(i) for i, co in enumerate(df["co"].unique())}
         edge_colors = [color_map[g.edges[e]["co"]] for e in g.edges()]
     else:
-        df = rr_sorted.query('(co == @co) and (line == @line)')
+        df = rr_sorted.query("(co == @co) and (line == @line)")
         df = df[df["adj_stas"].map(len) == 2]
         g.add_edges_from(df["adj_stas"])
         edge_colors = "black"
 
     plt.figure(figsize=(16, 16))
-    nx.draw(g, with_labels=True, node_color="white", node_size=2000, font_family=plt.rcParams["font.family"][0], width=3, edge_color=edge_colors, linewidths=1, edgecolors="gray", font_size=10)
+    nx.draw(
+        g,
+        with_labels=True,
+        node_color="white",
+        node_size=2000,
+        font_family=plt.rcParams["font.family"][0],
+        width=3,
+        edge_color=edge_colors,
+        linewidths=1,
+        edgecolors="gray",
+        font_size=10,
+    )
+
 
 show_sta_graph(*co_line_str.split("\t"))
 
@@ -1023,11 +1038,23 @@ sta_pt_man.to_crs("EPSG:4326").to_file("sta.geojson", driver="GeoJSON")
 
 """# その他"""
 
-print(1 if frozenset((1,2)) in [frozenset((2,1,))] else 0)
-print(set([frozenset((1,2)), frozenset((2,1))]))
-frozen_seg = frozenset({(1,2), (3,4)})
+print(
+    1
+    if frozenset((1, 2))
+    in [
+        frozenset(
+            (
+                2,
+                1,
+            )
+        )
+    ]
+    else 0
+)
+print(set([frozenset((1, 2)), frozenset((2, 1))]))
+frozen_seg = frozenset({(1, 2), (3, 4)})
 print(*frozen_seg)
-print({x for l in ([1]*3, [4]*4, [2]*5) for x in l})
+print({x for l in ([1] * 3, [4] * 4, [2] * 5) for x in l})
 print([s for (s, e) in frozen_seg])
 
 """# NetworkX による全点調査
@@ -1041,9 +1068,7 @@ NetworkX で路線ごとに全セグメントからグラフを作成し、そ�
 l = []
 for co, line_name in lines:
     ggraph = gen_graph_from_gs_ls(railroad_split_by_stations.loc[co, line_name]["geometry"])
-    l.append(
-        pd.Series([ggraph.degree[v] for v in ggraph]).value_counts().sort_index().rename(f"{co} {line_name}")
-    )
+    l.append(pd.Series([ggraph.degree[v] for v in ggraph]).value_counts().sort_index().rename(f"{co} {line_name}"))
 degree_count_df = pd.DataFrame(l).fillna(0).astype(int)
 
 degree_count_df.sort_values(1, ascending=False).head(10)
