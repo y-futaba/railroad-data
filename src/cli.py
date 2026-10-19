@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 import matplotlib.pyplot as plt
 
-from src.domain.config import DEFAULT_CONFIG
+from src.domain.config import PipelineConfig
 from src.pipelines.phase1_prepare import run_phase1
 from src.pipelines.phase2_finalize import (
     assign_aliases_to_sorted_railroads,
@@ -21,7 +21,7 @@ from src.pipelines.visualize import show_sta_graph
 def build_parser() -> argparse.ArgumentParser:
     """CLI 引数パーサを構築する。"""
     parser = argparse.ArgumentParser(
-        prog="railroad_data",
+        prog="python -m src",
         description="国土数値情報（鉄道データ N02）の前処理・トポロジー解析・駅順ソートパイプライン",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -31,6 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Phase 1: 原データの路線結合・駅代表点算出・路線切断・隣接駅検査を実行する",
     )
     p1_parser.add_argument(
+        "--year",
+        type=int,
+        default=2022,
+        help="対象データの年度（西暦4桁、デフォルト: 2022 -> data/2022/...）",
+    )
+    p1_parser.add_argument(
         "--no-save",
         action="store_true",
         help="シェープファイルや CSV のファイル書き出しを行わない",
@@ -38,12 +44,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p2_parser = subparsers.add_parser(
         "phase2",
-        help="Phase 2: GIS 手動補正データの検証・駅順ソート・通称付与・最終出力を実行する",
+        help="Phase 2: GIS 手動補正データの検証・駅順ソート・通称の自動一次付与・手動再付与用 TSV/Shapefile および仮 GeoJSON 出力を実行する",
+    )
+    p2_parser.add_argument(
+        "--year",
+        type=int,
+        default=2022,
+        help="対象データの年度（西暦4桁、デフォルト: 2022 -> data/2022/...）",
     )
     p2_parser.add_argument(
         "--no-save",
         action="store_true",
-        help="最終ファイルの書き出しを行わない",
+        help="手動再付与用ファイルや仮 GeoJSON の書き出しを行わない",
     )
     p2_parser.add_argument(
         "--save-graph-images",
@@ -54,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
     plot_parser = subparsers.add_parser(
         "plot",
         help="指定した事業者または路線の駅接続グラフを描画する",
+    )
+    plot_parser.add_argument(
+        "--year",
+        type=int,
+        default=2022,
+        help="対象データの年度（西暦4桁、デフォルト: 2022 -> data/2022/...）",
     )
     plot_parser.add_argument(
         "--co",
@@ -73,7 +91,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     """CLI メイン処理を実行する。"""
     parser = build_parser()
     args = parser.parse_args(argv)
-    config = DEFAULT_CONFIG
+    config = PipelineConfig(year=int(args.year))
 
     if args.command == "phase1":
         run_phase1(config, save_outputs=not bool(args.no_save))

@@ -30,9 +30,9 @@ def undirected_segments(ls: LineString) -> tuple[UndirectedSegment, ...]:
 
 
 def get_all_ordered_segments(mls: MultiLineString) -> tuple[Segment, ...]:
-    """`MultiLineString` 内の全 `LineString` から重複を除いた有向セグメント列を取得する。"""
+    """`MultiLineString` 内の全 `LineString` から重複を除いた有向セグメント列を出現順に取得する。"""
     geoms = cast(Sequence[LineString], mls.geoms)
-    return tuple(frozenset(chain.from_iterable(map(ordered_segments, geoms))))
+    return tuple(dict.fromkeys(chain.from_iterable(map(ordered_segments, geoms))))
 
 
 def get_all_undirected_segments(mls: MultiLineString) -> tuple[UndirectedSegment, ...]:

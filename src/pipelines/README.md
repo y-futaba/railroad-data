@@ -1,13 +1,13 @@
-# `railroad_data.pipelines`
+# `src.pipelines`
 
-GIS（QGIS 等）での手動編集を境界とする **Phase 1（自動前処理・トポロジー検査）** と **Phase 2（手動補正データの検証・駅順ソート・通称付与・最終出力）**、および駅接続グラフの可視化処理を提供するパイプライン層パッケージです。
+GIS（QGIS 等）での手動編集を境界とする **Phase 1（自動前処理・トポロジー検査）** と **Phase 2（手動補正データの検証・駅順ソート・通称の自動一次付与・手動再付与用ファイルおよび仮 GeoJSON 出力）**、ならびに駅接続グラフの可視化処理を提供するパイプライン層パッケージです。
 
 ---
 
 ## モジュール構成
 
 - `phase1_prepare.py`: 原データの読み込み、路線結合、駅代表点算出、駅点での路線切断、欠落駅線分の補完、隣接駅トポロジー検査と中間シェープファイル出力
-- `phase2_finalize.py`: GIS 手動編集済みデータの読み込み・整合性検証、変更ステータス付与、直径パス分解による駅順ソート、事業者・路線通称の付与、Shapefile / TSV / GeoJSON エクスポート
+- `phase2_finalize.py`: GIS 手動編集済みデータの読み込み・整合性検証、変更ステータス付与、直径パス分解による駅順ソート、事業者・路線通称の自動一次付与、手動再付与用の `rr_sorted.tsv` / Shapefile (ZIP) と仮 GeoJSON のエクスポート
 - `visualize.py`: NetworkX と Matplotlib を用いた路線・事業者別の駅接続グラフ描画および画像保存
 
 ---
@@ -62,7 +62,7 @@ Phase 1 パイプラインの各ステップで生成される中間・最終 `G
 - `find_isolated_line_coords(split_railroads: gpd.GeoDataFrame, stations: gpd.GeoDataFrame, line_keys: Sequence[LineKey]) -> dict[LineKey, frozenset[Coord]]`
   - 隣接駅数が 0 個（孤立状態）の頂点を持つ路線とその座標集合を辞書として返します。
 - `assign_adjacent_stations_to_lines(split_railroads: gpd.GeoDataFrame, stations: gpd.GeoDataFrame, line_keys: Sequence[LineKey]) -> gpd.GeoDataFrame`
-  - 全路線の各 `LineString` に `adj_stas` 列と 1 始まりの連番 `id` を付与します。
+  - 全路線の各 `LineString` に `adj_stas` 列を付与し、路線 `(co, line)` ごとに `(adj_stas, (始点座標, 終点座標, 頂点数))` の複合キーで安定ソート（`mergesort`）した上で、常に再現性のある 1 始まりの連番 `id` を採番します。
 - `count_lines_per_route(railroads_with_adj_stas: gpd.GeoDataFrame, line_keys: Sequence[LineKey]) -> pd.DataFrame`
   - 路線ごとの `LineString` 行数を集計します。
 - `run_phase1(config: PipelineConfig = DEFAULT_CONFIG, *, save_outputs: bool = True) -> Phase1Result`
@@ -90,7 +90,7 @@ Phase 2 パイプラインの検証結果・中間グラフデータ・最終ソ
   - `removed_stations_df: gpd.GeoDataFrame` — 手動編集で削除・変更された元の駅点
   - `line_graph_summaries: tuple[LineGraphSummary, ...]` — 全路線の駅接続グラフ解析・パス分解結果
   - `sta_graph_df: pd.DataFrame` — 路線ごとの閉路・連結判定と抽出パス列のテーブル
-  - `rr_sorted: gpd.GeoDataFrame` — 駅順ソート・`line_id` / `seq_id` 採番・通称付与済みの最終路線データ
+  - `rr_sorted: gpd.GeoDataFrame` — 駅順ソート・`line_id` / `seq_id` 採番・通称の自動一次付与済みの路線データ
 
 ### 関数
 
@@ -111,13 +111,13 @@ Phase 2 パイプラインの検証結果・中間グラフデータ・最終ソ
 - `build_station_graph_table(rr_adjs_man: gpd.GeoDataFrame, image_dir_path: Path | None = None) -> tuple[pd.DataFrame, tuple[LineGraphSummary, ...]]`
   - 全路線の駅接続グラフ構築と直径パス分解を行い、テーブル `DataFrame` と `LineGraphSummary` タプル列を返します。
 - `sort_railroads_by_station_order(rr_adjs_man: gpd.GeoDataFrame, summaries: Sequence[LineGraphSummary]) -> gpd.GeoDataFrame`
-  - パス分解結果から生成したソートキーで各路線の `LineString` を駅順に並び替え、`line_id` と `seq_id` をインデックスに設定します。
+  - パス分解結果から生成した第1キー（`sorter_factory` による駅順スコア）、第2キー（`id`）、第3キー（`LineString` の `(始点座標, 終点座標, 頂点数)`）を用いて安定ソート（`mergesort`）で各路線の `LineString` を並び替え、実行ごとに変動しない一意な `line_id` と `seq_id` をインデックスに設定します。
 - `assign_aliases_to_sorted_railroads(rr_sorted: gpd.GeoDataFrame) -> gpd.GeoDataFrame`
-  - `co_alias`、`service`、`line_alias` 列を解決して付与します。
+  - マスタ辞書に基づき `co_alias`、`service`、`line_alias` 列をおおまかに自動一次付与します。
 - `find_duplicate_line_names(sta_graph_df: pd.DataFrame) -> pd.Series[int]`
   - 複数事業者で重複している路線名を集計します。
 - `export_final_outputs(rr_sorted: gpd.GeoDataFrame, sta_pt_man: gpd.GeoDataFrame, config: PipelineConfig) -> None`
-  - 最終データを Shapefile (ZIP)、TSV、GeoJSON（`EPSG:4326`）として出力します。
+  - 会社名・路線通称の手動再付与・調整用に `rr_sorted.tsv` および `rr_sorted/rr_sorted.shp`（`rr_sorted.zip`）を出力し、併せて地図アプリの動作確認用の仮 GeoJSON（`rr.geojson`、`sta.geojson`、`EPSG:4326`）を出力します。
 - `run_phase2(config: PipelineConfig = DEFAULT_CONFIG, *, save_outputs: bool = True, save_graph_images: bool = False) -> Phase2Result`
   - Phase 2 の全ステップを順次実行し、`Phase2Result` を返します。
 

@@ -1,7 +1,7 @@
 """鉄道データ（国土数値情報 N02）のステップ実行用インタラクティブスクリプト。
 
 VS Code Interactive Window 等で `# %%` セル単位でステップ実行するか、
-コマンドラインから `python -m railroad_data phase1` / `phase2` を実行する。
+コマンドラインから `python -m src phase1` / `phase2` を実行する。
 """
 
 # %% [markdown]
@@ -10,7 +10,7 @@ VS Code Interactive Window 等で `# %%` セル単位でステップ実行する
 # %%
 import geopandas as gpd
 
-from src.domain import DEFAULT_CONFIG
+from src.domain import PipelineConfig
 from src.pipelines import (
     assign_adjacent_stations_to_lines,
     assign_aliases_to_sorted_railroads,
@@ -39,7 +39,7 @@ from src.pipelines import (
     split_all_lines_by_stations,
 )
 
-config = DEFAULT_CONFIG
+config = PipelineConfig(year=2022)
 
 # %% [markdown]
 # # Phase 1: 駅で路線切断
@@ -134,6 +134,7 @@ irregular_sta_set_df = build_irregular_station_sets_df(
     re_railroad_split_by_stations,
     stations,
 )
+config.phase1_dir.mkdir(parents=True, exist_ok=True)
 irregular_sta_set_df.to_csv(config.irregular_sta_set_csv_path)
 irregular_sta_set_df
 
@@ -157,6 +158,7 @@ railroads_with_adj_stas = assign_adjacent_stations_to_lines(
     stations,
     lines,
 )
+config.phase1_dir.mkdir(parents=True, exist_ok=True)
 railroads_with_adj_stas.to_file(  # pyright: ignore[reportUnknownMemberType]
     config.railroad_adj_stas_path,
     encoding=config.encoding,
@@ -232,6 +234,7 @@ sta_graph, summaries = build_station_graph_table(
     rr_adjs_man,
     image_dir_path=config.image_dir_path,
 )
+config.phase2_dir.mkdir(parents=True, exist_ok=True)
 sta_graph.to_csv(config.sta_graph_csv_path, sep="\t")
 sta_graph
 
@@ -243,7 +246,9 @@ rr_sorted_base = sort_railroads_by_station_order(rr_adjs_man, summaries)
 rr_sorted_base
 
 # %% [markdown]
-# ## 14. 路線名の重複確認と通称（`co_alias`, `service`, `line_alias`）の付与
+# ## 14. 路線名の重複確認と通称（`co_alias`, `service`, `line_alias`）の自動一次付与
+# まずはマスタ辞書（`CO_ALIASES`, `SERVICES`, `LINE_ALIASES`, `SERVICE_LINE_ALIASES`）でおおまかに会社名・運行系統・路線名の通称を自動付与する。
+# 区間によって系統名・路線通称が分かれる路線など、辞書だけでは対応できない細かな通称は、次ステップで出力する `rr_sorted.tsv`（および `rr_sorted.shp`）上で手動で再付与・調整する。
 
 # %%
 duplicate_line_names = find_duplicate_line_names(sta_graph)
@@ -254,7 +259,9 @@ rr_sorted = assign_aliases_to_sorted_railroads(rr_sorted_base)
 rr_sorted.drop(columns="geometry")
 
 # %% [markdown]
-# ## 15. 最終出力（Shapefile ZIP / TSV / GeoJSON）
+# ## 15. 通称の手動再付与に向けた `rr_sorted.tsv` / Shapefile (ZIP) の出力と仮 GeoJSON 出力
+# - `rr_sorted.tsv`, `rr_sorted/rr_sorted.shp` (`rr_sorted.zip`): 手動で会社名・路線通称（`co_alias`, `service`, `line_alias`）を再付与・調整するための中間出力
+# - `rr.geojson`, `sta.geojson`: 地図アプリを形にするための仮の GeoJSON 出力
 
 # %%
 export_final_outputs(rr_sorted, sta_pt_man, config)

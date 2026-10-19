@@ -8,11 +8,12 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from shapely import ops
-from shapely.geometry import MultiLineString, Point
+from shapely.geometry import LineString, MultiLineString, Point
 from shapely.geometry.base import BaseGeometry
 
 from src.domain.config import DEFAULT_CONFIG, PipelineConfig
 from src.domain.types import Coord, ExcludedStation, LineKey
+from src.geometry.geodesic import extract_coords
 from src.geometry.split import (
     representative_station_point,
     split_line_at_point,
@@ -82,6 +83,7 @@ def load_and_compute_station_points(
     )
     stations = stations_ls.assign(geometry=rep_points)
     if save_file:
+        config.station_pt_path.parent.mkdir(parents=True, exist_ok=True)
         stations.to_file(config.station_pt_path, encoding=config.encoding)  # pyright: ignore[reportUnknownMemberType]
     return stations_ls, stations
 
@@ -142,13 +144,14 @@ def find_excluded_stations(
         if not missing_coords:
             return ()
 
+        station_names = sorted({str(sta_df[sta_geom_gs == Point(coord)]["N02_005"].iloc[0]) for coord in missing_coords})
         return tuple(
             ExcludedStation(
                 co=co,
                 line=line_name,
-                station_name=str(sta_df[sta_geom_gs == Point(coord)]["N02_005"].iloc[0]),
+                station_name=sta_name,
             )
-            for coord in missing_coords
+            for sta_name in station_names
         )
 
     return tuple(excluded for co, line_name in line_keys for excluded in _excluded_for_line(co, line_name))
@@ -256,18 +259,18 @@ def build_irregular_station_sets_df(
             coord: name for coord, name in reversed(tuple(zip(sta_coords, sta_names, strict=True)))
         }
 
-        irregular_name_sets = sorted(
+        irregular_name_tuples = sorted(
             {
-                frozenset(coord_to_name[edge_sta] for edge_sta in edge_stas)
+                tuple(sorted({coord_to_name[edge_sta] for edge_sta in edge_stas}))
                 for edge_stas in edge_stas_to_coords
                 if len(edge_stas) != 2
             },
-            key=len,
+            key=lambda stas: (len(stas), stas),
         )
 
         rows: list[dict[str | int, str]] = [
             {"co": co, "line": line_name} | {i: sta_name for i, sta_name in enumerate(edge_stas)}
-            for edge_stas in irregular_name_sets
+            for edge_stas in irregular_name_tuples
         ]
         return pd.DataFrame(rows)
 
@@ -276,7 +279,7 @@ def build_irregular_station_sets_df(
     if not frames:
         return pd.DataFrame(columns=["co", "line"])
 
-    return pd.concat(frames).fillna("").sort_values(["co", "line"]).reset_index(drop=True)
+    return pd.concat(frames).fillna("").sort_values(["co", "line"], kind="mergesort").reset_index(drop=True)
 
 
 def find_isolated_line_coords(
@@ -306,20 +309,37 @@ def find_isolated_line_coords(
     }
 
 
+def _geom_tiebreak_key(geom_gs: gpd.GeoSeries) -> pd.Series[Any]:
+    """`LineString` の `(始点座標, 終点座標, 頂点数)` タプルをタイブレーク用ソートキーとして生成する。"""
+
+    def _extract_key(ls: LineString) -> tuple[Coord, Coord, int]:
+        coords = extract_coords(ls)
+        return (coords[0], coords[-1], len(coords))
+
+    return geom_gs.map(_extract_key)
+
+
 def assign_adjacent_stations_to_lines(
     split_railroads: gpd.GeoDataFrame,
     stations: gpd.GeoDataFrame,
     line_keys: Sequence[LineKey],
 ) -> gpd.GeoDataFrame:
-    """全路線の各 `LineString` に隣接駅属性 `adj_stas` と連番 `id` を付与する。"""
-    checked_frames: list[gpd.GeoDataFrame] = [
-        check_adjacent_stations_with_ls(
+    """全路線の各 `LineString` に隣接駅属性 `adj_stas` と決定論的な連番 `id` を付与する。"""
+
+    def _check_and_sort_line(co: str, line_name: str) -> gpd.GeoDataFrame:
+        checked_df = check_adjacent_stations_with_ls(
             _slice_line_gdf(split_railroads, co, line_name).copy(),
             _filter_stations_by_line(stations, co, line_name),
         )
-        for co, line_name in line_keys
-    ]
-    combined = pd.concat(checked_frames).sort_values(["co", "line"])
+        geom_gs = cast(gpd.GeoSeries, checked_df["geometry"])
+        return (
+            checked_df.assign(_geom_key=_geom_tiebreak_key(geom_gs))
+            .sort_values(by=["adj_stas", "_geom_key"], kind="mergesort")
+            .drop(columns=["_geom_key"])
+        )
+
+    checked_frames: list[gpd.GeoDataFrame] = [_check_and_sort_line(co, line_name) for co, line_name in line_keys]
+    combined = pd.concat(checked_frames).sort_index(kind="mergesort")
     out_gdf = combined.copy()
     out_gdf.insert(1, "id", np.arange(len(out_gdf)) + 1)  # pyright: ignore[reportUnknownMemberType]
     return out_gdf
@@ -378,6 +398,7 @@ def run_phase1(
     railroads_with_adj_stas = assign_adjacent_stations_to_lines(re_split, stations, line_keys)
 
     if save_outputs:
+        config.phase1_dir.mkdir(parents=True, exist_ok=True)
         irregular_sta_set_df.to_csv(config.irregular_sta_set_csv_path)
         railroads_with_adj_stas.to_file(  # pyright: ignore[reportUnknownMemberType]
             config.railroad_adj_stas_path, encoding=config.encoding

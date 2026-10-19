@@ -1,4 +1,4 @@
-# `railroad_data.domain`
+# `src.domain`
 
 鉄道データ処理パイプライン全体で共有される**型エイリアス・不変データモデル（値オブジェクト）・通称マスタ定義・パイプライン設定**を提供するドメイン層パッケージです。すべてのデータクラスは `@dataclass(frozen=True, slots=True)` により不変（イミュータブル）として定義されています。
 
@@ -79,35 +79,53 @@
 ### クラス
 
 #### `PipelineConfig`
-Phase 1・Phase 2 の入出力パスおよび幾何処理パラメータを一元管理する不変設定クラスです。
+Phase 1・Phase 2 の年次別データディレクトリ階層、入出力ファイル名、および幾何処理パラメータを一元管理する不変設定クラスです。`base_data_dir / str(year) / {raw, phase1, manual, phase2}` の 4 ステージ構成を採用しています。
 
-- **メンバ変数（入力ファイル）**
-  - `railroads_path: Path` — 原データ路線シェープファイル（デフォルト: `Path("N02-22_RailroadSection.shp")`）
-  - `stations_path: Path` — 原データ駅シェープファイル（デフォルト: `Path("N02-22_Station.shp")`）
-- **メンバ変数（Phase 1 出力）**
-  - `station_pt_path: Path` — 駅代表点シェープファイル（デフォルト: `Path("station_pt.shp")`）
-  - `irregular_sta_set_csv_path: Path` — 不整合隣接駅一覧 CSV（デフォルト: `Path("irregular_sta_set.csv")`）
-  - `railroad_adj_stas_path: Path` — 隣接駅付与済み路線シェープファイル（デフォルト: `Path("railroad_adj_stas.shp")`）
-- **メンバ変数（Phase 2 手動編集入力）**
-  - `railroad_adj_stas_manual_path: Path` — GIS手動補正後の路線シェープファイル（デフォルト: `Path("railroad_adj_stas_manual.shp")`）
-  - `station_pt_manual_path: Path` — GIS手動補正後の駅代表点シェープファイル（デフォルト: `Path("station_pt_manual.shp")`）
-- **メンバ変数（Phase 2 出力）**
-  - `sta_graph_csv_path: Path` — 駅接続グラフ解析結果 CSV/TSV（デフォルト: `Path("sta_graph.csv")`）
-  - `image_dir_path: Path` — 非連結・閉路グラフ画像の保存先ディレクトリ（デフォルト: `Path("images")`）
-  - `rr_sorted_dir_path: Path` — ソート済みシェープファイル格納ディレクトリ（デフォルト: `Path("rr_sorted")`）
+- **メンバ変数（データルート・対象年度）**
+  - `base_data_dir: Path` — データ格納ルートディレクトリ（デフォルト: `Path("data")`）
+  - `year: int` — 対象データの西暦年度（デフォルト: `2022`）
+- **メンバ変数（ファイル・ディレクトリ名）**
+  - `station_pt_name: str` — 駅代表点シェープファイル名（デフォルト: `"station_pt.shp"`）
+  - `irregular_sta_set_csv_name: str` — 不整合隣接駅一覧 CSV 名（デフォルト: `"irregular_sta_set.csv"`）
+  - `railroad_adj_stas_name: str` — 隣接駅付与済み路線シェープファイル名（デフォルト: `"railroad_adj_stas.shp"`）
+  - `railroad_adj_stas_manual_name: str` — GIS 手動補正後の路線シェープファイル名（デフォルト: `"railroad_adj_stas_manual.shp"`）
+  - `station_pt_manual_name: str` — GIS 手動補正後の駅代表点シェープファイル名（デフォルト: `"station_pt_manual.shp"`）
+  - `sta_graph_csv_name: str` — 駅接続グラフ解析結果 CSV/TSV 名（デフォルト: `"sta_graph.csv"`）
+  - `image_dir_name: str` — 非連結・閉路グラフ画像の保存先ディレクトリ名（デフォルト: `"images"`）
+  - `rr_sorted_dir_name: str` — ソート済みシェープファイル格納ディレクトリ名（デフォルト: `"rr_sorted"`）
   - `rr_sorted_shp_name: str` — ソート済みシェープファイル名（デフォルト: `"rr_sorted.shp"`）
-  - `rr_sorted_zip_stem: str` — ZIP アーカイブ出力時のベース名（デフォルト: `"rr_sorted"`）
-  - `rr_sorted_tsv_path: Path` — 属性テーブル TSV パス（デフォルト: `Path("rr_sorted.tsv")`）
-  - `rr_geojson_path: Path` — 路線 GeoJSON パス（デフォルト: `Path("rr.geojson")`）
-  - `sta_geojson_path: Path` — 駅代表点 GeoJSON パス（デフォルト: `Path("sta.geojson")`）
+  - `rr_sorted_zip_stem_name: str` — ZIP アーカイブ出力時のベース名（デフォルト: `"rr_sorted"`）
+  - `rr_sorted_tsv_name: str` — 通称の手動再付与・調整用の属性テーブル TSV 名（デフォルト: `"rr_sorted.tsv"`）
+  - `rr_geojson_name: str` — 地図アプリ動作確認用の仮路線 GeoJSON 名（デフォルト: `"rr.geojson"`）
+  - `sta_geojson_name: str` — 地図アプリ動作確認用の仮駅代表点 GeoJSON 名（デフォルト: `"sta.geojson"`）
 - **メンバ変数（幾何・I/O パラメータ）**
   - `snap_tolerance: float` — 駅点での路線切断・スナップ時の許容誤差 `[deg]`（デフォルト: `1e-5`）
   - `buffer_ratio: float` — くり抜き円バッファ半径の `snap_tolerance` に対する比率（デフォルト: `0.9`）
   - `encoding: str` — ファイル入出力時の文字エンコーディング（デフォルト: `"utf-8"`）
   - `target_crs: str` — GeoJSON 出力時の座標参照系（デフォルト: `"EPSG:4326"`）
-- **プロパティ（メソッド）**
-  - `rr_sorted_shp_path -> Path`: `rr_sorted_dir_path / rr_sorted_shp_name` を結合したシェープファイルのフルパスを返します。
+- **プロパティ（導出パス）**
+  - `year_short -> str` — 西暦下2桁の文字列（例: `2022 -> "22"`）
+  - `year_dir -> Path` — 年度ルートディレクトリ（`data/<year>`）
+  - `raw_dir -> Path` — 原データ格納ディレクトリ（`data/<year>/raw`）
+  - `phase1_dir -> Path` — Phase 1 出力ディレクトリ（`data/<year>/phase1`）
+  - `manual_dir -> Path` — GIS 手動編集済みデータ格納ディレクトリ（`data/<year>/manual`）
+  - `phase2_dir -> Path` — Phase 2 出力ディレクトリ（`data/<year>/phase2`）
+  - `railroads_path -> Path` — 原データ路線シェープファイル（`data/<year>/raw/N02-{year_short}_RailroadSection.shp`）
+  - `stations_path -> Path` — 原データ駅シェープファイル（`data/<year>/raw/N02-{year_short}_Station.shp`）
+  - `station_pt_path -> Path` — `data/<year>/phase1/station_pt.shp`
+  - `irregular_sta_set_csv_path -> Path` — `data/<year>/phase1/irregular_sta_set.csv`
+  - `railroad_adj_stas_path -> Path` — `data/<year>/phase1/railroad_adj_stas.shp`
+  - `railroad_adj_stas_manual_path -> Path` — `data/<year>/manual/railroad_adj_stas_manual.shp`
+  - `station_pt_manual_path -> Path` — `data/<year>/manual/station_pt_manual.shp`
+  - `sta_graph_csv_path -> Path` — `data/<year>/phase2/sta_graph.csv`
+  - `image_dir_path -> Path` — `data/<year>/phase2/images`
+  - `rr_sorted_dir_path -> Path` — `data/<year>/phase2/rr_sorted`
+  - `rr_sorted_shp_path -> Path` — `data/<year>/phase2/rr_sorted/rr_sorted.shp`
+  - `rr_sorted_zip_stem -> str` — `data/<year>/phase2/rr_sorted`（`rr_sorted.zip` 生成用ステム）
+  - `rr_sorted_tsv_path -> Path` — `data/<year>/phase2/rr_sorted.tsv`
+  - `rr_geojson_path -> Path` — `data/<year>/phase2/rr.geojson`
+  - `sta_geojson_path -> Path` — `data/<year>/phase2/sta.geojson`
 
 ### 定数
 
-- `DEFAULT_CONFIG: PipelineConfig` — デフォルトパラメータで初期化された `PipelineConfig` のシングルトンインスタンス
+- `DEFAULT_CONFIG: PipelineConfig` — デフォルトパラメータ（`year=2022`）で初期化された `PipelineConfig` のシングルトンインスタンス

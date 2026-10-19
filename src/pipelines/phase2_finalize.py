@@ -9,6 +9,7 @@ from typing import Any, cast
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
 from src.domain.aliases import (
@@ -18,7 +19,8 @@ from src.domain.aliases import (
     SERVICES,
 )
 from src.domain.config import DEFAULT_CONFIG, PipelineConfig
-from src.domain.types import LineGraphSummary, LineKey, LineStatus
+from src.domain.types import Coord, LineGraphSummary, LineKey, LineStatus
+from src.geometry.geodesic import extract_coords
 from src.pipelines.visualize import save_line_graph_image
 from src.topology.graph_sort import analyze_line_graph, sorter_factory
 
@@ -204,17 +206,32 @@ def build_station_graph_table(
     return sta_graph_df, summaries
 
 
+def _extract_geom_tiebreak_key(ls: LineString) -> tuple[Coord, Coord, int]:
+    """`LineString` の `(始点座標, 終点座標, 頂点数)` タプルをタイブレーク用キーとして返す。"""
+    coords = extract_coords(ls)
+    return (coords[0], coords[-1], len(coords))
+
+
 def sort_railroads_by_station_order(
     rr_adjs_man: gpd.GeoDataFrame,
     summaries: Sequence[LineGraphSummary],
 ) -> gpd.GeoDataFrame:
-    """抽出された各路線のパス順序に基づいて `LineString` を駅順にソートし、`line_id` と `seq_id` を採番する。"""
+    """抽出された各路線のパス順序に基づいて `LineString` を駅順にソートし、`line_id` と `seq_id` を決定論的に採番する。"""
 
     def _sort_single_line(summary: LineGraphSummary) -> gpd.GeoDataFrame:
         mask = (rr_adjs_man["co"] == summary.co) & (rr_adjs_man["line"] == summary.line)
         line_df = rr_adjs_man[mask]
         adjs_sorter = sorter_factory(summary.paths)
-        return line_df.sort_values(by="adj_stas", key=adjs_sorter)
+        geom_gs = cast(gpd.GeoSeries, line_df["geometry"])
+        with_sort_keys = line_df.assign(
+            _adj_order=adjs_sorter(line_df["adj_stas"]),
+            _id_order=line_df["id"].astype(int),
+            _geom_order=geom_gs.map(_extract_geom_tiebreak_key),
+        )
+        return with_sort_keys.sort_values(
+            by=["_adj_order", "_id_order", "_geom_order"],
+            kind="mergesort",
+        ).drop(columns=["_adj_order", "_id_order", "_geom_order"])
 
     sorted_frames: list[gpd.GeoDataFrame] = [_sort_single_line(summary) for summary in summaries]
     combined = pd.concat(sorted_frames)
@@ -229,7 +246,7 @@ def sort_railroads_by_station_order(
 def assign_aliases_to_sorted_railroads(
     rr_sorted: gpd.GeoDataFrame,
 ) -> gpd.GeoDataFrame:
-    """事業者通称（`co_alias`）、サービス名（`service`）、路線通称（`line_alias`）を付与する。"""
+    """マスタ辞書に基づき、事業者通称（`co_alias`）・運行系統（`service`）・路線通称（`line_alias`）を自動一次付与する。"""
     co_alias_s = rr_sorted["co"].replace(dict(CO_ALIASES))
     default_service_s = co_alias_s.replace(dict(SERVICES))
     default_line_alias_s = rr_sorted["line"].replace(dict(LINE_ALIASES))
@@ -275,7 +292,8 @@ def export_final_outputs(
     sta_pt_man: gpd.GeoDataFrame,
     config: PipelineConfig,
 ) -> None:
-    """ソート・通称付与済みの路線データと駅データを Shapefile (ZIP)、TSV、GeoJSON に出力する。"""
+    """通称（会社名・路線名）の手動再付与・補正に向けた `rr_sorted.tsv` / Shapefile (ZIP) と、地図アプリ動作確認用の仮 GeoJSON を出力する。"""
+    config.phase2_dir.mkdir(parents=True, exist_ok=True)
     config.rr_sorted_dir_path.mkdir(parents=True, exist_ok=True)
 
     rr_sorted_out = rr_sorted.assign(adj_stas=rr_sorted["adj_stas"].map(_join_adj_stas))
@@ -285,8 +303,8 @@ def export_final_outputs(
     shutil.make_archive(
         config.rr_sorted_zip_stem,
         format="zip",
-        root_dir=".",
-        base_dir=config.rr_sorted_dir_path,
+        root_dir=config.phase2_dir,
+        base_dir=config.rr_sorted_dir_name,
     )
 
     pd.DataFrame(rr_sorted_out.drop(columns="geometry")).to_csv(config.rr_sorted_tsv_path, sep="\t")
@@ -305,7 +323,7 @@ def run_phase2(
     save_outputs: bool = True,
     save_graph_images: bool = False,
 ) -> Phase2Result:
-    """Phase 2 パイプライン全体を実行し、最終的な Shapefile・TSV・GeoJSON を出力する。"""
+    """Phase 2 パイプライン全体を実行し、通称の手動再付与用ファイル（TSV・Shapefile）および仮 GeoJSON を出力する。"""
     railroads_with_adj_stas = load_and_normalize_adj_stas_gdf(config.railroad_adj_stas_path, encoding=config.encoding)
     rr_adjs_man = load_and_normalize_adj_stas_gdf(config.railroad_adj_stas_manual_path, encoding=config.encoding)
 
@@ -325,6 +343,7 @@ def run_phase2(
     image_dir = config.image_dir_path if save_graph_images else None
     sta_graph_df, summaries = build_station_graph_table(rr_adjs_man_with_status, image_dir_path=image_dir)
     if save_outputs:
+        config.phase2_dir.mkdir(parents=True, exist_ok=True)
         sta_graph_df.to_csv(config.sta_graph_csv_path, sep="\t")
 
     rr_sorted_base = sort_railroads_by_station_order(rr_adjs_man_with_status, summaries)

@@ -103,7 +103,7 @@ def check_adjacent_stations_with_ls(ls_df: gpd.GeoDataFrame, sta_pt_df: gpd.GeoD
         edge_stas_set = {coord_to_edge_stas[coord] for coord in extract_coords(ls) if coord in coord_to_edge_stas}
         if len(edge_stas_set) == 1:
             only_edge_stas = next(iter(edge_stas_set))
-            return ",".join({coord_to_sta_name[sta_coord] for sta_coord in only_edge_stas})
+            return ",".join(sorted({coord_to_sta_name[sta_coord] for sta_coord in only_edge_stas}))
         return "❗️"
 
     return ls_df.assign(adj_stas=ls_gs.map(_resolve_ls_adj_stas))

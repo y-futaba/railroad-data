@@ -48,28 +48,19 @@ def show_sta_graph(
         df = rr_sorted[(rr_sorted["line"] == line) & is_two_sta]
         group_col = "co"
     else:
-        df = rr_sorted[
-            (rr_sorted["co"] == co) & (rr_sorted["line"] == line) & is_two_sta
-        ]
+        df = rr_sorted[(rr_sorted["co"] == co) & (rr_sorted["line"] == line) & is_two_sta]
         group_col = None
 
     adj_pairs = cast(tuple[tuple[str, str], ...], tuple(df["adj_stas"]))
 
     if group_col is not None:
         groups = tuple(df[group_col].astype(str))
-        edges_with_attr = (
-            (u, v, {"group": grp})
-            for (u, v), grp in zip(adj_pairs, groups, strict=True)
-        )
+        edges_with_attr = ((u, v, {"group": grp}) for (u, v), grp in zip(adj_pairs, groups, strict=True))
         graph: nx.Graph[str] = nx.Graph(edges_with_attr)
         cmap = plt.get_cmap("tab10")  # pyright: ignore[reportUnknownMemberType]
         unique_groups = tuple(df[group_col].astype(str).unique())
-        color_map: dict[str, Any] = {
-            grp: cmap(i) for i, grp in enumerate(unique_groups)
-        }
-        edge_colors: Any = [
-            color_map[str(graph.edges[e]["group"])] for e in graph.edges
-        ]
+        color_map: dict[str, Any] = {grp: cmap(i) for i, grp in enumerate(unique_groups)}
+        edge_colors: Any = [color_map[str(graph.edges[e]["group"])] for e in graph.edges]
     else:
         graph = nx.Graph(adj_pairs)
         edge_colors = "black"
